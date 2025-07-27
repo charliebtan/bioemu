@@ -28,6 +28,7 @@ from bioemu.md_utils import (
     _switch_off_constraints,
 )
 from bioemu.utils import get_conda_prefix
+from bioemu.hacks import minimize_with_scipy, reorder_coordinates, check_atom_match
 
 logger = logging.getLogger(__name__)
 typer_app = typer.Typer(pretty_exceptions_enable=False)
@@ -143,7 +144,7 @@ def run_one_md(
     # fixed settings for standard protocol
     integrator_timestep_ps = 0.001
     init_timesteps_ps = [1e-6, 1e-5, 1e-4]
-    temperature_K = 300.0 * u.kelvin
+    temperature_K = 310.0 * u.kelvin
     constraint_force_const = 1000
 
     system, modeller = _prepare_system(frame)
@@ -162,6 +163,7 @@ def run_one_md(
         # fall back to default
         platform = None
         logger.warning("Cannot find CUDA platform. Simulation might be slow.")
+
     simulation = app.Simulation(modeller.topology, system, integrator, platform=platform)
 
     simulation.context.setPositions(modeller.positions)
@@ -174,10 +176,12 @@ def run_one_md(
     mdtop = mdtraj.Topology.from_openmm(modeller.topology)
 
     logger.debug("running local energy minimization")
-    simulation.minimizeEnergy()
+    minimization_steps = minimize_with_scipy(simulation, maxiter=1000)
+
+    print(f"Minimization steps: {minimization_steps}")
 
     if not only_energy_minimization:
-        _do_equilibration(
+        equilibiration_steps = _do_equilibration(
             simulation,
             integrator,
             init_timesteps_ps,
@@ -186,6 +190,12 @@ def run_one_md(
             simtime_ns_npt_equil,
             temperature_K,
         )
+        print(f"Equilibration steps: {equilibiration_steps}")
+        total_steps = minimization_steps + equilibiration_steps
+    else:
+        total_steps = minimization_steps
+
+    print(f"Total steps: {total_steps}")
 
     # always return constrained equilibration output
     positions = simulation.context.getState(positions=True).getPositions()
@@ -205,7 +215,10 @@ def run_one_md(
         ).save_pdb(os.path.join(outpath, f"{file_prefix}_md_top.pdb"))
         _run_and_write(simulation, integrator_timestep_ps, simtime_ns, idx, outpath, file_prefix)
 
-    return mdtraj.Trajectory(np.array(positions.value_in_unit(u.nanometer))[idx], mdtop.subset(idx))
+    return mdtraj.Trajectory(
+        np.array(positions.value_in_unit(u.nanometer)),
+        mdtop
+    )
 
 
 def run_all_md(
@@ -292,6 +305,8 @@ def main(
     samples_all_heavy.save_xtc(os.path.join(outpath, f"{prefix}_sidechain_rec.xtc"))
     samples_all_heavy[0].save_pdb(os.path.join(outpath, f"{prefix}_sidechain_rec.pdb"))
 
+    OTHER_PATH = "/network/scratch/t/tanc/md-runner-scbg-baselines-new/data/pdbs/"
+
     # run MD equilibration if requested
     if md_equil:
         samples_equil = run_all_md(
@@ -300,6 +315,20 @@ def main(
 
         samples_equil.save_xtc(os.path.join(outpath, f"{prefix}_md_equil.xtc"))
         samples_equil[0].save_pdb(os.path.join(outpath, f"{prefix}_md_equil.pdb"))
+
+        samples_npy = samples_equil.xyz
+
+        check_atom_match(
+            os.path.join(OTHER_PATH, "AAEW.pdb"),  # reference PDB
+            os.path.join(outpath, f"{prefix}_md_equil.pdb"),
+        )
+
+        samples_npy = reorder_coordinates(
+            os.path.join(OTHER_PATH, "AAEW.pdb"),  # reference PDB
+            os.path.join(outpath, f"{prefix}_md_equil.pdb"),
+            samples_npy,
+        )
+
 
     if verbose:
         logger.setLevel(original_loglevel)
