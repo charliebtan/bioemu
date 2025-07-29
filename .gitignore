@@ -132,3 +132,8 @@ cython_debug/
 *.pth
 *.pt
 
+*.out
+results/*
+bioemu_colabfold/*
+*.pdb
+*.xtc
