@@ -14,6 +14,88 @@ import openmm.unit as u
 import typer
 from tqdm.auto import tqdm
 
+import copy
+
+ENERGY_EVAL_BUDGET = 10_000
+
+SEQUENCES = [
+    "AC",
+    "AT",
+    "ET",
+    "GN",
+    "GP",
+    "HT",
+    "IM",
+    "KG",
+    "KQ",
+    "KS",
+    "LW",
+    "NF",
+    "NY",
+    "RL",
+    "RV",
+    "TD",
+    "SAEL",
+    "RYDT",
+    "CSFQ",
+    "FALS",
+    "CSGS",
+    "LPEM",
+    "LYVI",
+    "AYTG",
+    "VCVS",
+    "AAEW",
+    "FKVP",
+    "NQFM",
+    "DTDL",
+    "CTSA",
+    "ANYT",
+    "VTST",
+    "AWKC",
+    "RGSP",
+    "AVEK",
+    "FIYG",
+    "VLSM",
+    "QADY",
+    "DQAL",
+    "TFFL",
+    "FIGE",
+    "KKQF",
+    "SLTC",
+    "ITQD",
+    "DFKS",
+    "QDED",
+    "PGESTAES",
+    "NKEKFFQH",
+    "MYGRNCYM",
+    "IDHRQLKW",
+    "HWHSLICK",
+    "NPCLCYML",
+    "MRDPVLFA",
+    "DDRDTEQT",
+    "YFPHAGYT",
+    "ISKCKNGE",
+    "KRRGFFLE",
+    "CLCCGQWN",
+    "GNDLVTVI",
+    "EKYYWMQT",
+    "FWRVDHDM",
+    "DGVAHALS",
+    "PLFHVMYV",
+    "SQQKVAFE",
+    "IFGWVYTG",
+    "CGSWHKQR",
+    "WTYAFAHS",
+    "MWNSTEMI",
+    "PYIRNCVE",
+    "ANKSMIEA",
+    "MAPQTIAT",
+    "SPHKMRLC",
+    "VWIPVIDT",
+    "NHQYGSDP",
+    "PPWRECNN",
+]
+
 from bioemu.hpacker_setup.setup_hpacker import (
     HPACKER_DEFAULT_ENVNAME,
     HPACKER_DEFAULT_REPO_DIR,
@@ -122,6 +204,7 @@ def run_one_md(
     simtime_ns: float = 0.0,
     outpath: str = ".",
     file_prefix: str = "",
+    max_iter: int = 1000,
 ) -> mdtraj.Trajectory:
     """Run a standard MD protocol with amber99sb and explicit solvent (tip3p).
     Uses a constraint force on backbone atoms to avoid large deviations from
@@ -176,7 +259,7 @@ def run_one_md(
     mdtop = mdtraj.Topology.from_openmm(modeller.topology)
 
     logger.debug("running local energy minimization")
-    minimization_steps = minimize_with_scipy(simulation, maxiter=1000)
+    minimization_steps = minimize_with_scipy(simulation, maxiter=max_iter)
 
     print(f"Minimization steps: {minimization_steps}")
 
@@ -218,11 +301,11 @@ def run_one_md(
     return mdtraj.Trajectory(
         np.array(positions.value_in_unit(u.nanometer)),
         mdtop
-    )
+    ), total_steps
 
 
 def run_all_md(
-    samples_all: list[mdtraj.Trajectory], md_protocol: MDProtocol, outpath: str, simtime_ns: float
+    samples_all: list[mdtraj.Trajectory], md_protocol: MDProtocol, outpath: str, simtime_ns: float, max_iter
 ) -> mdtraj.Trajectory:
     """run MD for set of samples.
 
@@ -238,21 +321,30 @@ def run_all_md(
     """
 
     equil_frames = []
+    total_energy_evals = 0
 
     for n, frame in tqdm(
         enumerate(samples_all), leave=False, desc="running MD equilibration", total=len(samples_all)
     ):
         try:
-            equil_frame = run_one_md(
+            equil_frame, energy_evals = run_one_md(
                 frame,
                 only_energy_minimization=md_protocol == MDProtocol.LOCAL_MINIMIZATION,
                 simtime_ns=simtime_ns,
                 outpath=outpath,
                 file_prefix=f"frame{n}",
+                max_iter=max_iter,
             )
+            total_energy_evals += energy_evals
             equil_frames.append(equil_frame)
         except ValueError as err:
             logger.warning(f"Skipping sample {n} for MD setup: Failed with\n {err}")
+
+        if total_energy_evals >= ENERGY_EVAL_BUDGET:
+            logger.info(
+                f"Reached energy evaluation budget of {ENERGY_EVAL_BUDGET}. Stopping MD setup."
+            )
+            break
 
     if not equil_frames:
         raise RuntimeError(
@@ -264,13 +356,11 @@ def run_all_md(
 
 @typer_app.command()
 def main(
-    xtc_path: str = typer.Option(),
-    pdb_path: str = typer.Option(),
+    sequence_idx: int = 0,
     md_equil: bool = True,
     md_protocol: MDProtocol = MDProtocol.LOCAL_MINIMIZATION,
     simtime_ns: float = 0,
-    outpath: str = ".",
-    prefix: str = "samples",
+    outpath: str = "../scratch/bioemu_results",
     verbose: bool = False,
 ) -> None:
     """reconstruct side-chains for samples and relax with MD
@@ -289,6 +379,14 @@ def main(
         prefix: prefix for output file names
         verbose: if True, set log level to DEBUG
     """
+
+    sequence = SEQUENCES[sequence_idx]
+
+    os.makedirs(outpath, exist_ok=True)
+
+    xtc_path = f"results/{sequence}/samples.xtc"
+    pdb_path = f"results/{sequence}/topology.pdb"
+
     if verbose:
         original_loglevel = logger.getEffectiveLevel()
         logger.setLevel(logging.DEBUG)
@@ -299,40 +397,46 @@ def main(
         ), "unconstrained MD can only be run using equilibrated structures."
 
     samples = mdtraj.load_xtc(xtc_path, top=pdb_path)
-    samples_all_heavy = reconstruct_sidechains(samples)
+    samples_all_heavy = reconstruct_sidechains(samples[:1000])
 
     # write out sidechain reconstructed output
-    samples_all_heavy.save_xtc(os.path.join(outpath, f"{prefix}_sidechain_rec.xtc"))
-    samples_all_heavy[0].save_pdb(os.path.join(outpath, f"{prefix}_sidechain_rec.pdb"))
+    samples_all_heavy.save_xtc(os.path.join(outpath, f"{sequence}_sidechain_rec.xtc"))
+    samples_all_heavy[0].save_pdb(os.path.join(outpath, f"{sequence}_sidechain_rec.pdb"))
 
-    OTHER_PATH = "/network/scratch/t/tanc/md-runner-scbg-baselines-new/data/pdbs/"
+    OTHER_PATH = "/network/scratch/t/tanc/old_test_set/raw_data"
 
-    # run MD equilibration if requested
-    if md_equil:
-        samples_equil = run_all_md(
-            samples_all_heavy, md_protocol, simtime_ns=simtime_ns, outpath=outpath
-        )
+    for max_iter in [0, 1, 10, 100, 1000]:
 
-        samples_equil.save_xtc(os.path.join(outpath, f"{prefix}_md_equil.xtc"))
-        samples_equil[0].save_pdb(os.path.join(outpath, f"{prefix}_md_equil.pdb"))
+        temp_outpath = os.path.join(outpath, f"{sequence}_maxiter{max_iter}")
 
-        samples_npy = samples_equil.xyz
+        os.makedirs(temp_outpath, exist_ok=True)
 
-        check_atom_match(
-            os.path.join(OTHER_PATH, "AAEW.pdb"),  # reference PDB
-            os.path.join(outpath, f"{prefix}_md_equil.pdb"),
-        )
+        # run MD equilibration if requested
+        if md_equil:
+            samples_equil = run_all_md(
+                copy.deepcopy(samples_all_heavy), copy.deepcopy(md_protocol), simtime_ns=simtime_ns, outpath=temp_outpath, max_iter=max_iter
+            )
 
-        samples_npy = reorder_coordinates(
-            os.path.join(OTHER_PATH, "AAEW.pdb"),  # reference PDB
-            os.path.join(outpath, f"{prefix}_md_equil.pdb"),
-            samples_npy,
-        )
+            samples_equil.save_xtc(os.path.join(temp_outpath, f"{sequence}_md_equil.xtc"))
+            samples_equil[0].save_pdb(os.path.join(temp_outpath, f"{sequence}_md_equil.pdb"))
 
+            samples_npy = samples_equil.xyz
 
-    if verbose:
-        logger.setLevel(original_loglevel)
+            check_atom_match(
+                os.path.join(OTHER_PATH, f"{sequence}-traj-state0.pdb"),  # reference PDB
+                os.path.join(temp_outpath, f"{sequence}_md_equil.pdb"),
+            )
 
+            samples_npy = reorder_coordinates(
+                os.path.join(OTHER_PATH, f"{sequence}-traj-state0.pdb"),  # reference PDB
+                os.path.join(temp_outpath, f"{sequence}_md_equil.pdb"),
+                samples_npy,
+            )
+
+            np.save(os.path.join(temp_outpath, f"{sequence}_md_equil.npy"), samples_npy)
+
+        if verbose:
+            logger.setLevel(original_loglevel)
 
 if __name__ == "__main__":
     typer_app()

@@ -82,5 +82,6 @@ for sequence in "${sequences[@]}"; do
     python -m bioemu.sample \
         --sequence "$sequence" \
         --num_samples 10000 \
-        --output_dir "results/$sequence"
+        --output_dir "results/$sequence" \
+        --filter_samples=False
 done
