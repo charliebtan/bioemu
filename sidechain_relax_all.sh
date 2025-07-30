@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=sidechain_relax
 #SBATCH --get-user-env                # retrieve the users login environment
-#SBATCH -c 4
-#SBATCH --mem=24G
+#SBATCH -c 1
+#SBATCH --mem=8G
 #SBATCH -t 12:00:00
 #SBATCH --partition=main-cpu,long-cpu
 #SBATCH --array=0-76
