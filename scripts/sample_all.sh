@@ -9,6 +9,8 @@
 #SBATCH --output=logs/%x_%A_%a.out
 #SBATCH --error=logs/%x_%A_%a.err
 
+# YOU MAY NEED TO export BIOEMU_COLABFOLD_DIR=/home/mila/t/tanc/bioemu/colabfold
+
 sequences=(
     AA
     CE

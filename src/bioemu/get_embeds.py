@@ -196,10 +196,10 @@ def get_colabfold_embeds(
                 f"{res.stdout.decode()}\nFailed to run colabfold_batch due to the above error."
             )
 
-        # msa_file_out = os.path.join(f"{seqsha}.a3m")
-        # generated_a3m = os.path.join(res_dir, f"{embed_prefix}.a3m")
-        # if os.path.exists(generated_a3m):
-        #     shutil.copy(generated_a3m, msa_file_out)
+        msa_file_out = os.path.join(f"{seqsha}.a3m")
+        generated_a3m = os.path.join(res_dir, f"{embed_prefix}.a3m")
+        if os.path.exists(generated_a3m):
+            shutil.copy(generated_a3m, msa_file_out)
 
         single_rep_tempfile = os.path.join(
             res_dir,
