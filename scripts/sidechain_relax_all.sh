@@ -111,6 +111,4 @@ sequence="${sequences[$idx]}"
 python -m bioemu.sidechain_relax \
     --sequence $sequence \
     --output_dir "/network/scratch/t/tanc/bioemu-1e4/$sequence" \
-    --energy_eval_budget 10_000
-
-
+    --energy_eval_budget 10_000 # if you increase this enough it may be worth adding simtime_ns - think though about how to best sweep, maybe just take 100 points and then run MD? 10?
