@@ -16,86 +16,6 @@ from tqdm.auto import tqdm
 
 import copy
 
-ENERGY_EVAL_BUDGET = 10_000
-
-SEQUENCES = [
-    "AC",
-    "AT",
-    "ET",
-    "GN",
-    "GP",
-    "HT",
-    "IM",
-    "KG",
-    "KQ",
-    "KS",
-    "LW",
-    "NF",
-    "NY",
-    "RL",
-    "RV",
-    "TD",
-    "SAEL",
-    "RYDT",
-    "CSFQ",
-    "FALS",
-    "CSGS",
-    "LPEM",
-    "LYVI",
-    "AYTG",
-    "VCVS",
-    "AAEW",
-    "FKVP",
-    "NQFM",
-    "DTDL",
-    "CTSA",
-    "ANYT",
-    "VTST",
-    "AWKC",
-    "RGSP",
-    "AVEK",
-    "FIYG",
-    "VLSM",
-    "QADY",
-    "DQAL",
-    "TFFL",
-    "FIGE",
-    "KKQF",
-    "SLTC",
-    "ITQD",
-    "DFKS",
-    "QDED",
-    "PGESTAES",
-    "NKEKFFQH",
-    "MYGRNCYM",
-    "IDHRQLKW",
-    "HWHSLICK",
-    "NPCLCYML",
-    "MRDPVLFA",
-    "DDRDTEQT",
-    "YFPHAGYT",
-    "ISKCKNGE",
-    "KRRGFFLE",
-    "CLCCGQWN",
-    "GNDLVTVI",
-    "EKYYWMQT",
-    "FWRVDHDM",
-    "DGVAHALS",
-    "PLFHVMYV",
-    "SQQKVAFE",
-    "IFGWVYTG",
-    "CGSWHKQR",
-    "WTYAFAHS",
-    "MWNSTEMI",
-    "PYIRNCVE",
-    "ANKSMIEA",
-    "MAPQTIAT",
-    "SPHKMRLC",
-    "VWIPVIDT",
-    "NHQYGSDP",
-    "PPWRECNN",
-]
-
 from bioemu.hpacker_setup.setup_hpacker import (
     HPACKER_DEFAULT_ENVNAME,
     HPACKER_DEFAULT_REPO_DIR,
@@ -305,7 +225,7 @@ def run_one_md(
 
 
 def run_all_md(
-    samples_all: list[mdtraj.Trajectory], md_protocol: MDProtocol, outpath: str, simtime_ns: float, max_iter
+    samples_all: list[mdtraj.Trajectory], md_protocol: MDProtocol, outpath: str, simtime_ns: float, max_iter, energy_eval_budget,
 ) -> mdtraj.Trajectory:
     """run MD for set of samples.
 
@@ -340,9 +260,9 @@ def run_all_md(
         except ValueError as err:
             logger.warning(f"Skipping sample {n} for MD setup: Failed with\n {err}")
 
-        if total_energy_evals >= ENERGY_EVAL_BUDGET:
+        if total_energy_evals >= energy_eval_budget:
             logger.info(
-                f"Reached energy evaluation budget of {ENERGY_EVAL_BUDGET}. Stopping MD setup."
+                f"Reached energy evaluation budget of {energy_eval_budget}. Stopping MD setup."
             )
             break
 
@@ -356,7 +276,11 @@ def run_all_md(
 
 @typer_app.command()
 def main(
-    sequence_idx: int = 0,
+    sequence: str,
+    output_dir: str,
+    parallel_idx: int = None,
+    num_parallel: int = 1,
+    energy_eval_budget: int = 10000,
     md_equil: bool = True,
     md_protocol: MDProtocol = MDProtocol.LOCAL_MINIMIZATION,
     simtime_ns: float = 0,
@@ -380,12 +304,10 @@ def main(
         verbose: if True, set log level to DEBUG
     """
 
-    sequence = SEQUENCES[sequence_idx]
+    xtc_path = f"{output_dir}/samples.xtc"
+    pdb_path = f"{output_dir}/topology.pdb"
 
     os.makedirs(outpath, exist_ok=True)
-
-    xtc_path = f"results/{sequence}/samples.xtc"
-    pdb_path = f"results/{sequence}/topology.pdb"
 
     if verbose:
         original_loglevel = logger.getEffectiveLevel()
@@ -397,11 +319,17 @@ def main(
         ), "unconstrained MD can only be run using equilibrated structures."
 
     samples = mdtraj.load_xtc(xtc_path, top=pdb_path)
-    samples_all_heavy = reconstruct_sidechains(samples[:1000])
+
+    if parallel_idx is not None:
+        samples_all_heavy = reconstruct_sidechains(samples[parallel_idx * num_parallel:(parallel_idx + 1) * num_parallel])
+        extra_string = f"_parallel{parallel_idx}"
+    else:
+        extra_string = ""
+        samples_all_heavy = reconstruct_sidechains(samples)
 
     # write out sidechain reconstructed output
-    samples_all_heavy.save_xtc(os.path.join(outpath, f"{sequence}_sidechain_rec.xtc"))
-    samples_all_heavy[0].save_pdb(os.path.join(outpath, f"{sequence}_sidechain_rec.pdb"))
+    samples_all_heavy.save_xtc(os.path.join(outpath, f"{sequence}_sidechain_rec{extra_string}.xtc"))
+    samples_all_heavy[0].save_pdb(os.path.join(outpath, f"{sequence}_sidechain_rec{extra_string}.pdb"))
 
     OTHER_PATH = "/network/scratch/t/tanc/old_test_set/raw_data"
 
@@ -414,26 +342,26 @@ def main(
         # run MD equilibration if requested
         if md_equil:
             samples_equil = run_all_md(
-                copy.deepcopy(samples_all_heavy), copy.deepcopy(md_protocol), simtime_ns=simtime_ns, outpath=temp_outpath, max_iter=max_iter
+                copy.deepcopy(samples_all_heavy), copy.deepcopy(md_protocol), simtime_ns=simtime_ns, outpath=temp_outpath, max_iter=max_iter, energy_eval_budget=energy_eval_budget
             )
 
-            samples_equil.save_xtc(os.path.join(temp_outpath, f"{sequence}_md_equil.xtc"))
-            samples_equil[0].save_pdb(os.path.join(temp_outpath, f"{sequence}_md_equil.pdb"))
+            samples_equil.save_xtc(os.path.join(temp_outpath, f"{sequence}_md_equil_{extra_string}.xtc"))
+            samples_equil[0].save_pdb(os.path.join(temp_outpath, f"{sequence}_md_equil_{extra_string}.pdb"))
 
             samples_npy = samples_equil.xyz
 
             check_atom_match(
                 os.path.join(OTHER_PATH, f"{sequence}-traj-state0.pdb"),  # reference PDB
-                os.path.join(temp_outpath, f"{sequence}_md_equil.pdb"),
+                os.path.join(temp_outpath, f"{sequence}_md_equil_{extra_string}.pdb"),
             )
 
             samples_npy = reorder_coordinates(
                 os.path.join(OTHER_PATH, f"{sequence}-traj-state0.pdb"),  # reference PDB
-                os.path.join(temp_outpath, f"{sequence}_md_equil.pdb"),
+                os.path.join(temp_outpath, f"{sequence}_md_equil_{extra_string}.pdb"),
                 samples_npy,
             )
 
-            np.save(os.path.join(temp_outpath, f"{sequence}_md_equil.npy"), samples_npy)
+            np.save(os.path.join(temp_outpath, f"{sequence}_md_equil_{extra_string}.npy"), samples_npy)
 
         if verbose:
             logger.setLevel(original_loglevel)

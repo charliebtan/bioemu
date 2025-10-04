@@ -136,4 +136,8 @@ cython_debug/
 results/*
 bioemu_colabfold/*
 *.pdb
+
+*.out
+*.err
 *.xtc
+colabfold/*
