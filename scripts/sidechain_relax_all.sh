@@ -109,6 +109,11 @@ idx="${SLURM_ARRAY_TASK_ID}"
 sequence="${sequences[$idx]}"
 
 python -m bioemu.sidechain_relax \
-    --sequence $sequence \
-    --output_dir "/network/scratch/t/tanc/bioemu-1e4/$sequence" \
-    --energy_eval_budget 10_000 # if you increase this enough it may be worth adding simtime_ns - think though about how to best sweep, maybe just take 100 points and then run MD? 10?
+    sequence $sequence \
+    output_dir "/network/scratch/t/tanc/bioemu-1e4/$sequence" \
+    energy_eval_budget 10_000 # if you increase this enough it may be worth adding simtime_ns - think though about how to best sweep, maybe just take 100 points and then run MD? 10?
+
+
+    # reduced to 0.01ps for each step size as otherwise
+    # ~200,000 energy evaluations used probably ok as the sequences are much smaller
+    # than this was originally intended for

@@ -119,12 +119,11 @@ def reconstruct_sidechains(traj: mdtraj.Trajectory) -> mdtraj.Trajectory:
 def run_one_md(
     frame: mdtraj.Trajectory,
     only_energy_minimization: bool = False,
-    simtime_ns_nvt_equil: float = 0.1,
-    simtime_ns_npt_equil: float = 0.4,
+    simtime_ns_nvt_equil: float = 0.0,
     simtime_ns: float = 0.0,
     outpath: str = ".",
     file_prefix: str = "",
-    max_iter: int = 1000,
+    max_iter_energy_min: int = 1000,
 ) -> mdtraj.Trajectory:
     """Run a standard MD protocol with amber99sb and explicit solvent (tip3p).
     Uses a constraint force on backbone atoms to avoid large deviations from
@@ -146,6 +145,9 @@ def run_one_md(
 
     # fixed settings for standard protocol
     integrator_timestep_ps = 0.001
+    init_time_ps = 0.01
+    # reduced 0.1 -> 0.01ps for each step size as otherwise ~200,000 energy evaluations used
+    # probably ok as the sequences are much smaller than this was originally intended for
     init_timesteps_ps = [1e-6, 1e-5, 1e-4]
     temperature_K = 310.0 * u.kelvin
     constraint_force_const = 1000
@@ -179,7 +181,7 @@ def run_one_md(
     mdtop = mdtraj.Topology.from_openmm(modeller.topology)
 
     logger.debug("running local energy minimization")
-    minimization_steps = minimize_with_scipy(simulation, maxiter=max_iter)
+    minimization_steps = minimize_with_scipy(simulation, maxiter=max_iter_energy_min)
 
     print(f"Minimization steps: {minimization_steps}")
 
@@ -188,10 +190,9 @@ def run_one_md(
             simulation,
             integrator,
             init_timesteps_ps,
+            init_time_ps,
             integrator_timestep_ps,
             simtime_ns_nvt_equil,
-            simtime_ns_npt_equil,
-            temperature_K,
         )
         print(f"Equilibration steps: {equilibiration_steps}")
         total_steps = minimization_steps + equilibiration_steps
@@ -199,6 +200,8 @@ def run_one_md(
         total_steps = minimization_steps
 
     print(f"Total steps: {total_steps}")
+
+    breakpoint()
 
     # always return constrained equilibration output
     positions = simulation.context.getState(positions=True).getPositions()
@@ -225,7 +228,7 @@ def run_one_md(
 
 
 def run_all_md(
-    samples_all: list[mdtraj.Trajectory], md_protocol: MDProtocol, outpath: str, simtime_ns: float, max_iter, energy_eval_budget,
+    samples_all: list[mdtraj.Trajectory], md_protocol: MDProtocol, outpath: str, simtime_ns: float, max_iter_energy_min, energy_eval_budget,
 ) -> mdtraj.Trajectory:
     """run MD for set of samples.
 
@@ -253,7 +256,7 @@ def run_all_md(
                 simtime_ns=simtime_ns,
                 outpath=outpath,
                 file_prefix=f"frame{n}",
-                max_iter=max_iter,
+                max_iter_energy_min=max_iter_energy_min,
             )
             total_energy_evals += energy_evals
             equil_frames.append(equil_frame)
@@ -276,13 +279,13 @@ def run_all_md(
 
 @typer_app.command()
 def main(
-    sequence: str,
-    output_dir: str,
+    sequence: str = None,
+    output_dir: str = None,
     parallel_idx: int = None,
-    num_parallel: int = 1,
+    num_per_parallel: int = 1,
     energy_eval_budget: int = 10000,
     md_equil: bool = True,
-    md_protocol: MDProtocol = MDProtocol.LOCAL_MINIMIZATION,
+    md_protocol: MDProtocol = MDProtocol.MD_EQUIL,
     simtime_ns: float = 0,
     outpath: str = "../scratch/bioemu_results",
     verbose: bool = False,
@@ -321,7 +324,7 @@ def main(
     samples = mdtraj.load_xtc(xtc_path, top=pdb_path)
 
     if parallel_idx is not None:
-        samples_all_heavy = reconstruct_sidechains(samples[parallel_idx * num_parallel:(parallel_idx + 1) * num_parallel])
+        samples_all_heavy = reconstruct_sidechains(samples[parallel_idx * num_per_parallel:(parallel_idx + 1) * num_per_parallel])
         extra_string = f"_parallel{parallel_idx}"
     else:
         extra_string = ""
@@ -333,16 +336,16 @@ def main(
 
     OTHER_PATH = "/network/scratch/t/tanc/old_test_set/raw_data"
 
-    for max_iter in [0, 1, 10, 100, 1000]:
+    for max_iter_energy_min in [1000]:
 
-        temp_outpath = os.path.join(outpath, f"{sequence}_maxiter{max_iter}")
+        temp_outpath = os.path.join(outpath, f"{sequence}_maxiter{max_iter_energy_min}")
 
         os.makedirs(temp_outpath, exist_ok=True)
 
         # run MD equilibration if requested
         if md_equil:
             samples_equil = run_all_md(
-                copy.deepcopy(samples_all_heavy), copy.deepcopy(md_protocol), simtime_ns=simtime_ns, outpath=temp_outpath, max_iter=max_iter, energy_eval_budget=energy_eval_budget
+                copy.deepcopy(samples_all_heavy), copy.deepcopy(md_protocol), simtime_ns=simtime_ns, outpath=temp_outpath, max_iter_energy_min=max_iter_energy_min, energy_eval_budget=energy_eval_budget
             )
 
             samples_equil.save_xtc(os.path.join(temp_outpath, f"{sequence}_md_equil_{extra_string}.xtc"))

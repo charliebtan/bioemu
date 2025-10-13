@@ -125,10 +125,9 @@ def _do_equilibration(
     simulation: app.Simulation,
     integrator: mm.Integrator,
     init_timesteps_ps: list[float],
+    init_time_ps: float,
     integrator_timestep_ps: float,
     simtime_ns_nvt_equil: float,
-    simtime_ns_npt_equil: float,
-    temperature_K: u.Quantity,
 ) -> None:
     """run equilibration protocol on initial structure.
 
@@ -143,10 +142,12 @@ def _do_equilibration(
         simulation: openMM simulation
         integrator: openMM integrator
         init_timesteps_ps: timesteps to use sequentially during the first phase of equilibration.
+        init_time_ps: time to run for each of the init_timesteps_ps
         integrator_timestep_ps: final integrator timestep
         simtime_ns_nvt_equil: simulation time (ns) for NVT equilibration
-        simtime_ns_npt_equil: simulation time (ns) for NPT equilibration
-        temperature_K: system temperature in Kelvin
+
+    Returns:
+        total number of steps run
     """
 
     total_steps = 0
@@ -160,9 +161,9 @@ def _do_equilibration(
         logger.debug(f"running with init integration step of {init_int_ts_ps} ps")
         integrator.setStepSize(init_int_ts_ps * u.picosecond)
 
-        num_steps = int(0.1 / init_int_ts_ps)
+        num_steps = int(init_time_ps / init_int_ts_ps)
         total_steps += num_steps
-        # run for 0.1 ps
+        # run for simulation for init_int_len_ps with init_int_ts_ps
         simulation.step(num_steps)
 
     # NVT equilibration with higher than usual friction
